@@ -41,6 +41,12 @@ class Prover:
     setup: Setup
     program: Program
     pk: CommonPreprocessedInput
+    A: Polynomial
+    B: Polynomial
+    C: Polynomial
+    PI: Polynomial
+    beta: Scalar
+    gamma: Scalar
 
     def __init__(self, setup: Setup, program: Program):
         self.group_order = program.group_order
@@ -98,12 +104,33 @@ class Prover:
         # - A_values: witness[program.wires()[i].L]
         # - B_values: witness[program.wires()[i].R]
         # - C_values: witness[program.wires()[i].O]
+        a_vals = [] # left wires
+        b_vals = [] # right wires
+        c_vals = [] # output wires
+
+        for gate_wire in program.wires():
+            a_vals.append(Scalar(witness[gate_wire.L]))
+            b_vals.append(Scalar(witness[gate_wire.R]))
+            c_vals.append(Scalar(witness[gate_wire.O]))
+        
+        while len(a_vals) < len(self.pk.QL.values):
+            a_vals.append(Scalar(0))
+        while len(b_vals) < len(self.pk.QR.values):
+            b_vals.append(Scalar(0))
+        while len(c_vals) < len(self.pk.QO.values):
+            b_vals.append(Scalar(0))
 
         # Construct A, B, C Lagrange interpolation polynomials for
         # A_values, B_values, C_values
 
-        # Compute a_1, b_1, c_1 commitments to A, B, C polynomials
+        self.A = Polynomial(a_vals, Basis.LAGRANGE)
+        self.B = Polynomial(b_vals, Basis.LAGRANGE)
+        self.C = Polynomial(c_vals, Basis.LAGRANGE)
 
+        # Compute a_1, b_1, c_1 commitments to A, B, C polynomials
+        a_1 = setup.commit(self.A)
+        b_1 = setup.commit(self.B)
+        c_1 = setup.commit(self.C)
         # Sanity check that witness fulfils gate constraints
         assert (
             self.A * self.pk.QL
@@ -121,12 +148,21 @@ class Prover:
     def round_2(self) -> Message2:
         group_order = self.group_order
         setup = self.setup
-
+        roots_of_unity = Scalar.roots_of_unity(group_order)
+        F_values = [0 for _ in range(group_order)]
+        G_values = [0 for _ in range(group_order)]
         # Using A, B, C, values, and pk.S1, pk.S2, pk.S3, compute
         # Z_values for permutation grand product polynomial Z
         #
         # Note the convenience function:
         #       self.rlc(val1, val2) = val_1 + self.beta * val_2 + gamma
+        Z_values = [Scalar(0) for _ in range(group_order + 1)]
+        Z_values[0] = Scalar(1)
+
+        for i in range(group_order):
+            F_values[i] = self.rlc(self.A.values[i], roots_of_unity[i])*self.rlc(self.B.values[i], 2*roots_of_unity[i])*self.rlc(self.C.values[i], 3*roots_of_unity[i])
+            G_values[i] = self.rlc(self.A.values[i], self.pk.S1.values[i])*self.rlc(self.B.values[i], self.pk.S2.values[i])*self.rlc(self.C.values[i], self.pk.S3.values[i])
+            Z_values[i+1] = Z_values[i]*Scalar(F_values[i]/G_values[i])
 
         # Check that the last term Z_n = 1
         assert Z_values.pop() == 1
@@ -146,8 +182,9 @@ class Prover:
             ] == 0
 
         # Construct Z, Lagrange interpolation polynomial for Z_values
+        Z = Polynomial(Z_values, Basis.LAGRANGE)
         # Cpmpute z_1 commitment to Z polynomial
-
+        z_1 = setup.commit(Z)
         # Return z_1
         return Message2(z_1)
 
