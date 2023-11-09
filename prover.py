@@ -287,24 +287,49 @@ class Prover:
     def round_4(self) -> Message4:
         # Compute evaluations to be used in constructing the linearization polynomial.
 
-        # Compute a_eval = A(zeta)
-        # Compute b_eval = B(zeta)
-        # Compute c_eval = C(zeta)
-        # Compute s1_eval = pk.S1(zeta)
-        # Compute s2_eval = pk.S2(zeta)
+        # Compute a_eval = A(zeta), b_eval = B(zeta), c_eval = C(zeta)
+        a_eval = self.A.barycentric_eval(self.zeta)
+        self.a_eval = a_eval
+        b_eval = self.B.barycentric_eval(self.zeta)
+        self.b_eval = b_eval
+        c_eval = self.C.barycentric_eval(self.zeta)
+        self.c_eval = c_eval
+        # Compute s1_eval = pk.S1(zeta), s2_eval = pk.S2(zeta)
+        s1_eval = self.pk.S1.barycentric_eval(self.zeta)
+        s2_eval = self.pk.S2.barycentric_eval(self.zeta)
+        self.s1_eval = s1_eval
+        self.s2_eval = s2_eval
         # Compute z_shifted_eval = Z(zeta * ω)
-
+        z_shifted_eval = self.Z.barycentric_eval(self.zeta*Scalar.root_of_unity(self.group_order))
+        self.z_shift_eval = z_shifted_eval
         # Return a_eval, b_eval, c_eval, s1_eval, s2_eval, z_shifted_eval
         return Message4(a_eval, b_eval, c_eval, s1_eval, s2_eval, z_shifted_eval)
 
     def round_5(self) -> Message5:
         # Evaluate the Lagrange basis polynomial L0 at zeta
+        L0_eval = self.L0.barycentric_eval(self.zeta)
+
         # Evaluate the vanishing polynomial Z_H(X) = X^n - 1 at zeta
+        Z_H_eval = self.zeta ** self.group_order-1
+        PI_eval = self.PI.barycentric_eval(self.zeta)
 
         # Move T1, T2, T3 into the coset extended Lagrange basis
+        exp_T1 = self.fft_expand(self.T1)
+        exp_T2 = self.fft_expand(self.T2)
+        exp_T3 = self.fft_expand(self.T3)
+
         # Move pk.QL, pk.QR, pk.QM, pk.QO, pk.QC into the coset extended Lagrange basis
+        exp_QL = self.fft_expand(self.pk.QL)
+        exp_QR = self.fft_expand(self.pk.QR)
+        exp_QM = self.fft_expand(self.pk.QM)
+        exp_QO = self.fft_expand(self.pk.QO)
+        exp_QC = self.fft_expand(self.pk.QC)
+
         # Move Z into the coset extended Lagrange basis
+        exp_Z = self.fft_expand(self.Z)
+
         # Move pk.S3 into the coset extended Lagrange basis
+        exp_S3 = self.fft_expand(self.pk.S3)
 
         # Compute the "linearization polynomial" R. This is a clever way to avoid
         # needing to provide evaluations of _all_ the polynomials that we are
@@ -319,11 +344,19 @@ class Prover:
         # it has to be "linear" in the proof items, hence why we can only use each
         # proof item once; any further multiplicands in each term need to be
         # replaced with their evaluations at Z, which do still need to be provided
+        group_order = self.group_order
+        c_eval = Polynomial([self.c_eval]*group_order*4, Basis.LAGRANGE)
 
+        R = (exp_QM*self.a_eval*self.b_eval+exp_QL*self.a_eval+exp_QR*self.b_eval+exp_QO*self.c_eval+PI_eval+exp_QC) +
+            ((exp_Z*(self.rlc(self.a_eval, self.zeta)*self.rlc(self.b_eval, self.zeta*Scalar(2))*self.rlc(self.c_eval, self.zeta*Scalar(3))) - (self.rlc(c_eval, exp_S3)*self.rlc(self.b_eval, self.s2_eval) * self.rlc(self.a_eval, self.s1_eval))*self.z_shift_eval)*self.alpha) +
+            (((exp_Z - Scalar(1))*L0_eval)*(self.alpha*self.alpha))-((exp_T1 + exp_T2*(self.zeta**self.group_order)+exp_T3*(self.zeta**(2*self.group_order)))*Z_H_eval)
+        zeta=self.zeta
+        R_coeffs = self.expanded_evals_to_coeffs(R).values
+        R_actual = Polynomial(R_coeffs[0:group_order],Basis.MONOMIAL).fft()
         # Commit to R
-
+        self.setup.commit(R_actual)
         # Sanity-check R
-        assert R.barycentric_eval(zeta) == 0
+        assert R_actual.barycentric_eval(zeta) == 0
 
         print("Generated linearization polynomial R")
 
