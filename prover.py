@@ -45,9 +45,27 @@ class Prover:
     B: Polynomial
     C: Polynomial
     PI: Polynomial
+    L0: Polynomial
+    Z_H: Polynomial
+    T1: Polynomial
+    T2: Polynomial
+    T3: Polynomial
     beta: Scalar
     gamma: Scalar
     zeta: Scalar
+    fft_cofactor: Scalar
+    alpha: Scalar
+
+    a_eval: Scalar
+    b_eval: Scalar
+    c_eval: Scalar
+
+    s1_eval: Scalar
+    s2_eval: Scalar
+    z_shift_eval: Scalar
+
+    X: Polynomial
+    v: Scalar
 
     def __init__(self, setup: Setup, program: Program):
         self.group_order = program.group_order
@@ -226,10 +244,13 @@ class Prover:
         # Compute Z_H = X^N - 1, also in evaluation form in the coset
         fft_cofactor = self.fft_cofactor
         Z_H = Polynomial([(((fft_cofactor*Scalar(x)) **group_order)-1 ) for x in expanded_roots_of_unity], Basis.LAGRANGE)
+        self.Z_H = Z_H
         # Compute L0, the Lagrange basis polynomial that evaluates to 1 at x = 1 = ω^0
         # and 0 at other roots of unity
         L0 = Polynomial([Scalar(1)]+[Scalar(0) for _ in range(group_order - 1)], Basis.LAGRANGE)
+        self.L0 = L0
         X = Polynomial(expanded_roots_of_unity, Basis.LAGRANGE)
+        self.X = X
         two_X = Polynomial([Scalar(2)*x for x in expanded_roots_of_unity], Basis.LAGRANGE)
         three_X = Polynomial([Scalar(3)*x for x in expanded_roots_of_unity], Basis.LAGRANGE) 
         # Expand L0 into the coset extended Lagrange basis
@@ -267,6 +288,9 @@ class Prover:
         T1 = Polynomial(QUOT_coefficients.values[0:group_order], Basis.MONOMIAL).fft()
         T2 = Polynomial(QUOT_coefficients.values[group_order: 2*group_order], Basis.MONOMIAL).fft()
         T3 = Polynomial(QUOT_coefficients.values[2*group_order:3*group_order], Basis.MONOMIAL).fft()
+        self.T1 = T1
+        self.T2 = T2
+        self.T3 = T3
         # Sanity check that we've computed T1, T2, T3 correctly
         assert (
             T1.barycentric_eval(fft_cofactor)
@@ -347,9 +371,9 @@ class Prover:
         group_order = self.group_order
         c_eval = Polynomial([self.c_eval]*group_order*4, Basis.LAGRANGE)
 
-        R = (exp_QM*self.a_eval*self.b_eval+exp_QL*self.a_eval+exp_QR*self.b_eval+exp_QO*self.c_eval+PI_eval+exp_QC) +
+        R = ((exp_QM*self.a_eval*self.b_eval+exp_QL*self.a_eval+exp_QR*self.b_eval+exp_QO*self.c_eval+PI_eval+exp_QC) +
             ((exp_Z*(self.rlc(self.a_eval, self.zeta)*self.rlc(self.b_eval, self.zeta*Scalar(2))*self.rlc(self.c_eval, self.zeta*Scalar(3))) - (self.rlc(c_eval, exp_S3)*self.rlc(self.b_eval, self.s2_eval) * self.rlc(self.a_eval, self.s1_eval))*self.z_shift_eval)*self.alpha) +
-            (((exp_Z - Scalar(1))*L0_eval)*(self.alpha*self.alpha))-((exp_T1 + exp_T2*(self.zeta**self.group_order)+exp_T3*(self.zeta**(2*self.group_order)))*Z_H_eval)
+            (((exp_Z - Scalar(1))*L0_eval)*(self.alpha*self.alpha))-((exp_T1 + exp_T2*(self.zeta**self.group_order)+exp_T3*(self.zeta**(2*self.group_order)))*Z_H_eval))
         zeta=self.zeta
         R_coeffs = self.expanded_evals_to_coeffs(R).values
         R_actual = Polynomial(R_coeffs[0:group_order],Basis.MONOMIAL).fft()
@@ -362,7 +386,11 @@ class Prover:
 
         # Generate proof that W(z) = 0 and that the provided evaluations of
         # A, B, C, S1, S2 are correct
-
+        exp_A = self.fft_expand(self.A)
+        exp_B = self.fft_expand(self.B)
+        exp_C = self.fft_expand(self.C)
+        exp_S1 = self.fft_expand(self.pk.S1)
+        exp_S2 = self.fft_expand(self.pk.S2)
         # Move A, B, C into the coset extended Lagrange basis
         # Move pk.S1, pk.S2 into the coset extended Lagrange basis
 
@@ -375,23 +403,29 @@ class Prover:
         #   + v**4 * (S1 - s1_eval)
         #   + v**5 * (S2 - s2_eval)
         # ) / (X - zeta)
+        W_Z = (R+((exp_A - self.a_eval)*self.v)+((exp_B-self.b_eval)*(self.v**2)) +((exp_C - self.c_eval)*(self.v**3))+((exp_S1 - self.s1_eval)*(self.v**4))+((exp_S2 - self.s2_eval)*(self.v**5))) / (self.X*self.fft_cofactor - self.zeta)
+
+        W_z_coeffs = self.expanded_evals_to_coeffs(W_Z).values
+        group_order = self.group_order
 
         # Check that degree of W_z is not greater than n
         assert W_z_coeffs[group_order:] == [0] * (group_order * 3)
 
         # Compute W_z_1 commitment to W_z
-
+        W_z_1=self.setup.commit(W_Z)
         # Generate proof that the provided evaluation of Z(z*w) is correct. This
         # awkwardly different term is needed because the permutation accumulator
         # polynomial Z is the one place where we have to check between adjacent
         # coordinates, and not just within one coordinate.
         # In other words: Compute W_zw = (Z - z_shifted_eval) / (X - zeta * ω)
+        W_zw = (exp_Z - self.z_shift_eval) / (self.X*self.fft_cofactor - (self.zeta * Scalar.root_of_unity(group_order)))
+        W_zw_coeffs = self.expanded_evals_to_coeffs(W_zw).values
 
         # Check that degree of W_z is not greater than n
         assert W_zw_coeffs[group_order:] == [0] * (group_order * 3)
 
         # Compute W_z_1 commitment to W_z
-
+        W_zw_1 = self.setup.commit(W_zw)
         print("Generated final quotient witness polynomials")
 
         # Return W_z_1, W_zw_1

@@ -74,16 +74,25 @@ class VerificationKey:
     # Basic, easier-to-understand version of what's going on
     def verify_proof_unoptimized(self, group_order: int, pf, public=[]) -> bool:
         # 4. Compute challenges
-
+        transcript = Transcript(b"plonk")
+        beta, gamma = transcript.round_1(pf.msg_1)
+        alpha, _fft_cofactor = transcript.round_2(pf.msg_2)
+        zeta = transcript.round_3(pf.msg_3)
+        v = transcript.round_4(pf.msg_4)
+        u = transcript.round_5(pf.msg_5)
+        pf = pf.flatten()
         # 5. Compute zero polynomial evaluation Z_H(ζ) = ζ^n - 1
-
+        z_h_eval = zeta ** group_order - 1
+        omega = Scalar.root_of_unity(group_order)
         # 6. Compute Lagrange polynomial evaluation L_0(ζ)
-
+        L_0_eval = z_h_eval / (group_order * (zeta - 1))
         # 7. Compute public input polynomial evaluation PI(ζ).
-
+        PI = Polynomial([Scalar(-x) for x in public] + [Scalar(0) for _ in range(group_order - len(public))], Basis.LAGRANGE)
+        PI_eval = PI.barycentric_eval(zeta)
         # Recover the commitment to the linearization polynomial R,
         # exactly the same as what was created by the prover
-
+        gate_constraints = ec_lincomb([(self.Qm, pf["a_eval"]*pf["b_eval"]), (self.Q1, pf["a_eval"]), (self.Qr, pf["b_eval"]), (self.Qo, pf["c_eval"]), (b.G1, PI_eval), (self.Qc, Scalar(1))])
+        scalar_before_z = 
         # Verify that R(z) = 0 and the prover-provided evaluations
         # A(z), B(z), C(z), S1(z), S2(z) are all correct
 
