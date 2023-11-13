@@ -87,18 +87,28 @@ class VerificationKey:
         # 6. Compute Lagrange polynomial evaluation L_0(ζ)
         L_0_eval = z_h_eval / (group_order * (zeta - 1))
         # 7. Compute public input polynomial evaluation PI(ζ).
-        PI = Polynomial([Scalar(-x) for x in public] + [Scalar(0) for _ in range(group_order - len(public))], Basis.LAGRANGE)
+        PI = Polynomial([Scalar(-x) for x in public] +[Scalar(0) for _ in range(group_order - len(public))], Basis.LAGRANGE)
         PI_eval = PI.barycentric_eval(zeta)
         # Recover the commitment to the linearization polynomial R,
         # exactly the same as what was created by the prover
         gate_constraints = ec_lincomb([(self.Qm, pf["a_eval"]*pf["b_eval"]), (self.Q1, pf["a_eval"]), (self.Qr, pf["b_eval"]), (self.Qo, pf["c_eval"]), (b.G1, PI_eval), (self.Qc, Scalar(1))])
-        scalar_before_z = 
+        scalar_before_z = ((pf["a_eval"]+beta*zeta+gamma)*(pf["b_eval"]+beta*Scalar(2)*zeta+gamma)*(pf["c_eval"]+Scalar(3)*beta*zeta+gamma))
+        scalar_before_s3_rlc = -(pf["z_shifted_eval"]*(pf["a_eval"]+beta*pf["s1_eval"]+gamma)*(pf["b_eval"]+beta*pf["s2_eval"]+gamma))
+
+        s3_rlc = ec_lincomb([(b.G1, pf["c_eval"]), (self.S3, beta), (b.G1, gamma)])
+        permutation_without_a = ec_lincomb([(pf["z_1"], scalar_before_z), (s3_rlc, scalar_before_s3_rlc)])
+
+        z_without_a2 = ec_lincomb([(pf["z_1"], L_0_eval), (b.G1, -L_0_eval)])
+        lin_poly = ec_lincomb([(gate_constraints, 1), (permutation_without_a, alpha), (z_without_a2, alpha**2), (quotient_without_zh, -z_h_eval)])
         # Verify that R(z) = 0 and the prover-provided evaluations
         # A(z), B(z), C(z), S1(z), S2(z) are all correct
-
+        lhs = b.pairing(b.G2, ec_lincomb([(lin_poly, 1), (pf["a_1"],v), (pf["b_1"], v**2), (b.G1, -(v**2)*pf["b_eval"]), (pf["c_1"],v**3), (b.G1, -(v**3)*pf["c_eval"]), (self.S1, v**4), (b.G1, -(v**4)*pf["s1_eval"]), (self.S2, v**5), (b.G1, -(v**5)*pf["s2_eval"]),]))
+        rhs = b.pairing(b.add(self.X_2, ec_mul(b.G2, -zeta)), pf["W_z_1"])
+        assert lhs == rhs
+    
         # Verify that the provided value of Z(zeta*w) is correct
-
-        return False
+        assert b.pairing(ec_lincomb([(self.X_2, 1), (b.G2, -(zeta*omega))]),pf["W_zw_1"]) == b.pairing(b.G2, ec_lincomb([(pf["z_1"],1),(b.G1, -pf["z_shifted_eval"])]))
+        return True
 
     # Compute challenges (should be same as those computed by prover)
     def compute_challenges(
